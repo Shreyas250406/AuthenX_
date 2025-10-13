@@ -1,10 +1,10 @@
 # ===================================================
-# AuthenX AI Verification Service v3
+# AuthenX AI Verification Service v4
 # Detects AI, Photoshop edits, and fake geotags
 # ===================================================
 
 from dotenv import load_dotenv
-import os, io, requests, piexif, random
+import os, io, base64, requests, piexif
 from PIL import Image
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -50,7 +50,9 @@ async def preflight_handler(request: Request, path_name: str):
 # Request schema
 # ----------------------------
 class VerifyRequest(BaseModel):
-    image_url: str
+    image_url: str | None = None
+    image_base64: str | None = None
+    asset_id: str | None = None
 
 
 # ----------------------------
@@ -109,10 +111,7 @@ def extract_exif(img_bytes):
 def detect_photoshop(exif):
     sw = (exif.get("software") or "").lower()
     model = (exif.get("camera_model") or "").lower()
-    editing_tools = [
-        "photoshop", "adobe", "pixlr", "canva", "lightroom",
-        "remove.bg", "gimp", "fotor"
-    ]
+    editing_tools = ["photoshop", "adobe", "pixlr", "canva", "lightroom", "remove.bg", "gimp", "fotor"]
     normal_sources = ["android", "iphone", "samsung", "oneplus", "pixel", "vivo"]
 
     for tool in editing_tools:
@@ -128,7 +127,7 @@ def detect_photoshop(exif):
 
 
 def call_hf_model(image_bytes):
-    """Use a more reliable model output normalization."""
+    """Call Hugging Face model and normalize outputs."""
     if not HF_TOKEN:
         print("⚠️ Missing HF_TOKEN — skipping inference.")
         return None
@@ -155,7 +154,7 @@ def call_hf_model(image_bytes):
 
 
 def fallback_heuristic(image_bytes):
-    """Fallback variance-based heuristic."""
+    """Simple grayscale variance heuristic."""
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("L").resize((128, 128))
         pixels = list(img.getdata())
@@ -188,7 +187,6 @@ def combine_auth_score(exif, realism, edited, geo_valid):
         score += 0.1
     if edited:
         score -= 0.25
-    # soften curve for real images
     if score < 0.3 and realism > 0.6:
         score += 0.3
     return round(max(min(score, 1.0), 0.0), 2)
@@ -199,24 +197,32 @@ def combine_auth_score(exif, realism, edited, geo_valid):
 # ----------------------------
 @app.post("/verify-image")
 def verify_image(req: VerifyRequest):
-    print(f"🧠 Authenticating image: {req.image_url}")
-    try:
-        res = requests.get(req.image_url, timeout=10)
-        if res.status_code != 200:
-            return {"success": False, "message": "Download failed"}
-        img_bytes = res.content
-    except Exception as e:
-        return {"success": False, "message": f"Network error: {e}"}
+    print("🧠 Authenticating image...")
 
+    # --- Accept either base64 or URL ---
+    img_bytes = None
+    if req.image_base64:
+        try:
+            header, encoded = req.image_base64.split(",", 1) if "," in req.image_base64 else ("", req.image_base64)
+            img_bytes = base64.b64decode(encoded)
+        except Exception as e:
+            return {"success": False, "message": f"Invalid base64: {e}"}
+    elif req.image_url:
+        try:
+            res = requests.get(req.image_url, timeout=10)
+            if res.status_code != 200:
+                return {"success": False, "message": "Image download failed"}
+            img_bytes = res.content
+        except Exception as e:
+            return {"success": False, "message": f"Network error: {e}"}
+    else:
+        return {"success": False, "message": "No image provided"}
+
+    # --- Analyze ---
     exif = extract_exif(img_bytes)
     edited, tool = detect_photoshop(exif)
     geo_valid, geo_reason = verify_geotag_legitimacy(exif.get("gps"))
-
-    realism = call_hf_model(img_bytes)
-    hf_used = realism is not None
-    if realism is None:
-        realism = fallback_heuristic(img_bytes)
-
+    realism = call_hf_model(img_bytes) or fallback_heuristic(img_bytes)
     score = combine_auth_score(exif, realism, edited, geo_valid)
     is_real = score >= AUTH_THRESHOLD
 
@@ -225,7 +231,6 @@ def verify_image(req: VerifyRequest):
         "is_real": is_real,
         "authenticity_score": score,
         "realism_score": realism,
-        "hf_used": hf_used,
         "editing_detected": edited,
         "editing_tool": tool,
         "geotag_valid": geo_valid,
@@ -237,4 +242,4 @@ def verify_image(req: VerifyRequest):
 
 @app.get("/")
 def home():
-    return {"message": "🚀 AuthenX AI v3 running successfully"}
+    return {"message": "🚀 AuthenX AI v4 running successfully"}
