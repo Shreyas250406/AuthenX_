@@ -1,6 +1,6 @@
 {
+  "installCommand": "npm rebuild vite && npm install --force",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "installCommand": "npm install",
   "framework": "vite"
 }
