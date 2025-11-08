@@ -1,7 +1,7 @@
 
   # AuthenX App Development
 
-  This is a code bundle for AuthenX App Development. The original project is available at https://www.figma.com/design/qJzLSPM6C4unPgQK9r1jzc/AuthenX-App-Development.
+  This is a code bundle for AuthenX App Development. The original project is available at https://authen-x-xkou.vercel.app/
 
   ## Running the code
 
